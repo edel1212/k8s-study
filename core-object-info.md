@@ -1,5 +1,112 @@
 # Object 설정 (중요)
 
+---
+## labels / selector / naming
+
+### 1. Labels (이름표)
+> 오브젝트를 식별하고 분류하기 위해 붙이는 메타데이터(Key-Value)입니다.
+> - **시스템 필수 아님**: 쿠버네티스 시스템 자체가 필수로 요구하는 특정 레이블은 없습니다. 아무 단어나 넣어도 작동합니다.
+> - **단! 실무에선 필수**: 모니터링 필터링, 대시보드 관리, 배포 자동화를 위해 쿠버네티스 공식 권장 표준을 반드시 지켜서 작성하는 것이 실무 관례 
+
+#### 공식 권장 표준 네이밍 규칙
+- part-of : 서비스를 대표하는 이름 / 전체 거대한 프로젝트/시스템 이름 
+- component : 아키텍처 상의 역할 (예: backend-api, database)
+- name : 애플리케이션의 이름 (예: ticket-booking)
+- instance : 특정 배포판의 고유 인스턴스명. 디플로이먼트의 `metadata.name`과 동일하게 맞추는 것이 철칙 (중복 금지).
+  - ✅ PersistentVolume(PV)의 경우 **네임스페이스에 속하지 않는 클러스터 전체**(전국구) 단위의 리소스이기에 instance 명이 다르다.
+  - 요약) 같은 namespace에 속한 애들은 언제든지 생성/삭제가 가능하기에 묶어서 관리하는것이 더 좋음 (큰 묶음으로 이해하면 편하다)
+- version : app의 버전명시
+- managed-by : 생성된(배포도구) 주체 (optional) 필수는 아니지만 작성 권고
+  - 다른 수정자가 만들어진 기준에 맞춰 수정을 해줘야 형상관리에 용의함
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  # 티켓 예매 시스템 네임스페이스
+  namespace: ticket-reservation
+  # 디플로이먼트 식별 이름 (중복 ❌)
+  name: ticket-booking-v1
+  # 1. [Deployment 라벨] 대시보드나 인프라 관리자가 인프라 단위로 조회할 때 사용
+  labels:
+    app.kubernetes.io/part-of: ticket-reservation  # 전체 프로젝트/시스템명
+    app.kubernetes.io/domain: ticketing            # 비즈니스 도메인 (티켓팅)
+    app.kubernetes.io/component: backend-api       # 아키텍처 상 역할 (백엔드 API)
+    app.kubernetes.io/name: ticket-booking         # 애플리케이션 이름
+    app.kubernetes.io/instance: ticket-booking-v1  # 이 배포판의 고유 인스턴스명
+    app.kubernetes.io/version: "1.2.0"             # 애플리케이션 버전
+    app.kubernetes.io/managed-by: argocd           # 배포 도구 (예: ArgoCD)
+spec:
+  # 2. [셀렉터] 아래 "3"번 pod template 레이블 중에서 어떤 pod들을 관리할지 지정
+  # 실무에서는 "가장 고유한 값"인 name과 instance 정도만 조합해서 엮습니다.
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ticket-booking
+      app.kubernetes.io/instance: ticket-booking-v1
+  template:
+    metadata:
+      # 3. [생성될 Pod들의 이름표] Prometheus 모니터링이나 Service가 포드를 찾을 때 핵심 데이터가 됩니다.
+      labels:
+        app.kubernetes.io/part-of: ticket-reservation
+        app.kubernetes.io/domain: ticketing
+        app.kubernetes.io/component: backend-api
+        app.kubernetes.io/name: ticket-booking
+        app.kubernetes.io/instance: ticket-booking-v1
+        app.kubernetes.io/version: "1.2.0"
+        app.kubernetes.io/managed-by: argocd
+```
+
+### 2. Selector (검색 자석)
+> 다른 오브젝트(Pod 등)를 찾아내어 연결하기 위한 검색 조건입니다.
+> - 규칙: Selector의 내용 ⊂ 대상 오브젝트의 Labels (대상의 레이블이 셀렉터 조건을 모두 포함해야 매칭됨)
+
+#### ⚠️ 리소스별 Selector 작성 문법 차이
+> 리소스가 구형 아키텍처인지 신형 표준인지에 따라 나뉨
+
+##### 2-1. Service (오래된 레거시 리소스)
+- 단순 일치만 가능한 구형 방식을 고수합니다.
+- 작성법: selector 바로 아래에 기재
+```yaml
+selector:
+  app.kubernetes.io/name: ticket-booking
+```
+
+##### 2-2. Deployment, PVC 등 (대부분의 모던 리소스)
+- 단순 일치(`matchLabels`)뿐만 아니라 복잡한 조건(`matchExpressions`)도 쓸 수 있는 신형 표준을 사용합니다.
+```yaml
+selector:
+  matchLabels:
+    app.kubernetes.io/name: ticket-booking
+```
+
+#### 2-3. HPA의 경우는 또 다르다.
+> HPA는 다수의 대상을 찾는 '검색 자석(Selector)'을 사용하지 않고, 타겟을 직접 지목하는 '정확한 주소(scaleTargetRef)' 방식을 사용
+```yaml
+# HPA 일부
+scaleTargetRef:
+  apiVersion: apps/v1
+  kind: Deployment
+  name: ticket-booking-v1
+```
+
+#### 검색 대상 정리
+
+## 🔍 오브젝트 간 검색/연결 관계 정리
+> Deployment는 `spec.selector` 와 `spec.template` 정보를 기반으로 ReplicaSet을 생성한다.
+> ReplicaSet은 `spec.selector` 를 통해 Pod를 검색하고, `spec.template` 을 기반으로 Pod를 생성 및 관리한다.
+
+
+| 검색/참조 주체 (Kind) | 대상 (Kind) | 연결 방식 | 검색/참조 범위 |
+|----------------------|-------------|-----------|---------------|
+| Deployment | Pod | `spec.selector.matchLabels`, `matchExpressions` | 오직 Pod |
+| ReplicaSet | Pod | `spec.selector.matchLabels`, `matchExpressions` | 오직 Pod |
+| Service | Pod | `spec.selector` | 오직 Pod |
+| PVC | PV | `selector.matchLabels` + StorageClass + Capacity + AccessMode | 오직 PV |
+| HPA | Deployment / StatefulSet / ReplicaSet | `scaleTargetRef` | 지정된 Kind + Name |
+
+
+---
+
 ## Namespace
 - k8s의 가장 큰 묶음으로 **Object들을 그루핑** 해주는 기능을 함
 - 해당 name-space 기준으로 deployment를 묶는다.
