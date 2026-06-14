@@ -59,6 +59,7 @@ spec:
 ### 2. Selector (검색 자석)
 > 다른 오브젝트(Pod 등)를 찾아내어 연결하기 위한 검색 조건입니다.
 > - 규칙: Selector의 내용 ⊂ 대상 오브젝트의 Labels (대상의 레이블이 셀렉터 조건을 모두 포함해야 매칭됨)
+> - HPA, ConfigMap, Secret, PVC 등은 Selector 방식이 아니라 오브젝트 내부 설정에서 대상의 이름을 직접 지정하여 연결한다.
 
 #### ⚠️ 리소스별 Selector 작성 문법 차이
 > 리소스가 구형 아키텍처인지 신형 표준인지에 따라 나뉨
@@ -71,7 +72,7 @@ selector:
   app.kubernetes.io/name: ticket-booking
 ```
 
-##### 2-2. Deployment, PVC 등 (대부분의 모던 리소스)
+##### 2-2. Deployment
 - 단순 일치(`matchLabels`)뿐만 아니라 복잡한 조건(`matchExpressions`)도 쓸 수 있는 신형 표준을 사용합니다.
 ```yaml
 selector:
@@ -102,6 +103,7 @@ scaleTargetRef:
 | ReplicaSet | Pod | `spec.selector.matchLabels`, `matchExpressions` | 오직 Pod |
 | Service | Pod | `spec.selector` | 오직 Pod |
 | PVC | PV | `selector.matchLabels` + StorageClass + Capacity + AccessMode | 오직 PV |
+| PV | PVC | ClaimRef (바인딩 결과) | 특정 PVC |
 | HPA | Deployment / StatefulSet / ReplicaSet | `scaleTargetRef` | 지정된 Kind + Name |
 
 
