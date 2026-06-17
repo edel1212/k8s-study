@@ -1,5 +1,14 @@
 # ConfigMap, Secret
 
+## 0. 두 오브젝트(ConfigMap, Secret)에 data, stringData 사용 가능한가?
+> 아니오. 사용 가능한 속성이 다르다.
+- Secret : 
+  - data : ⭕
+  - stringData : ⭕
+- ConfigMap
+  - data : ⭕
+  - stringData : ❌
+
 ## 1. ConfigMap (일반 설정 관리)
 > 애플리케이션이 사용하는 **비민감성 환경 변수나 설정 파일**을 저장하고 주입하는 Object
 
@@ -101,19 +110,163 @@ spec:
   - 가벼운 도구 활용: Sealed Secrets나 Sops 같은 오픈소스를 활용해 **Git에는 암호화된 파일로 올리고, 클러스터 배포 시에만 복호화**. 
   - 전문 솔루션 연동: 전사적 보안 관리가 필요할 땐 HashiCorp Vault 같은 **외부 서드파티와 연동**.
 
+### 2-2. Secret에서의 data 와 stringData
+> Secret 리소스는 기본적으로 보안(인코딩)을 위해 값을 Base64로 인코딩해서 저장해야 한다는 규칙이 있다.
+- ① data (Base64 인코딩 필수) 👎
+  - 특징: 
+    - 쿠버네티스의 표준 저장 방식.
+    - 값을 넣으려면 개발자가 직접 값을 Base64로 변환(인코딩) 필요.
+  - ② stringData (평문 입력 가능 - 편의성 필드) 👍
+    - 특징: 개발자의 귀찮음을 덜어주기 위해 만든 쓰기 전용(Write-only) 편의성 속성.
+      -사람이 읽을 수 있는 평문(Plain Text)을 그대로 적으면 된다..
+    - 작동 방식: YAML 파일을 쿠버네티스에 배포(kubectl apply)하는 순간, 쿠버네티스가 알아서 Base64로 인코딩한 뒤 내부적으로는 data 필드로 옮겨서 저장
 
-// TODO 타입 관련 테스트 진행 및 확인 필요
-// - secret 환경 변수 처럼 쓸수 있는지
-// - secret 파일 저장 형식이 아니여도 되는지
 
-- 중요 데이터를 관리하는게 목적임
-  - type이라는 속성이 있음 근데 어따쓰는건지는 모르겠   
-    - docker-registry 라는 타입도 있다는데 이게 뭐
-      
+### 2-3. Secret을 파일 생성 방법으로 사용법
+> 볼륨을 통한 마운트를 진행해야 사용이 가능하다
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  namespace: anotherclass-123
+  name: api-tester-1231-postgresql
+  labels:
+    part-of: k8s-anotherclass
+    component: backend-server
+    name: api-tester
+    instance: api-tester-1231
+    version: 1.0.0
+    managed-by: dashboard
 
-### 흐름
-- 1 ) pod 내 volumes.mountPath 로 컨테이너 내 매핑된 볼륨 디렉토리 가 생심
-- 2 ) volume 과 secret이 매칭이 되서 "1" 위치(컨테이너 내)에 파일이 생성됨
-- 3 ) ConfigMap에 적용된 환경 변수 값과 매칭되어 해당 값을 읽어 옴
+# 지정된 이름 기준으로 파일이 생성된다.    
+stringData:
+  # 디스크에 마운트될 때 만들어질 실제 파일 이름
+  postgresql-info.yaml: |
+    driver-class-name: "org.postgresql.Driver"
+    url: "jdbc:postgresql://postgresql:5431"
+    username: "dev"
+    password: "dev123"
+```
+- Deployment내 template 호출
+```yaml
+# 스팩 설정    
+spec:
+  # 실제 생성될 Pod의 붕어빵 틀 (템플릿)
+  template:
+    spec:
+      containers:
+          # 아래 'volumes'에서 정의한 볼륨을 컨테이너 내부의 실제 폴더 경로에 연결(Mount)
+          volumeMounts:
+            # volumes와 매핑될 이름
+            - name: secret-datasource
+              mountPath: /usr/src/myapp/datasource
+
+    volumes:
+      - name: secret-datasource
+        # 민감한 정보(Secret)를 안전하게 Pod에 주입하는 속성
+        secret:
+          secretName: api-tester-1231-postgresql
+```
+
+
+### 2-4. Secret을 각각 key:value 로 사용법
+> 사실 이런식으로 사용하지 않으나 다양한 방식이 있단 것에 의미를 두자
+> envFrom.secretRef 통해 지정 가능
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  namespace: anotherclass-123
+  name: api-tester-1231-properties
+  labels:
+    part-of: k8s-anotherclass
+    component: backend-server
+    name: api-tester
+    instance: api-tester-1231
+    version: 1.0.0
+    managed-by: dashboard
+stringData:
+  spring_profiles_active: "dev"
+  application_role: "ALL"
+  postgresql_filepath: "/usr/src/myapp/datasource/dev/postgresql-info.yaml"
+```
+- Deployment내 template 호출
+```yaml
+envFrom:
+  - secretRef:
+    name: api-tester-1231-properties
+```
+
+### 2-5. Secret의 Type
+
+#### 2-5-1. Opaque 타입  (범용 비밀번호)
+> 자유롭게 등록이 가능한 방식 (기본값)
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: my-database-secret
+type: Opaque # 일반 범용 타입 (생략 가능)
+stringData:
+  # ✨ Key 이름을 완전히 내 마음대로 정할 수 있습니다.
+  db-user: "admin"
+  db-password: "super-secure-password-1234"
+  connection-timeout: "30"
+```
+
+#### 2-5-2. kubernetes.io/tls 타입 예시 (HTTPS 인증서)
+> 인그레스(Ingress) 같은 쿠버네티스 네트워크 시스템이 읽어가는 secret.
+> - Key 이름이 틀리면 배포 자체가 거부됩니다.
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: company-domain-tls
+type: kubernetes.io/tls # ⚠️ TLS 인증서 전용 양식임을 명시
+stringData:
+  # ❌ 여기에 'my-cert: |' 같은 임의의 이름을 적으면 에러가 납니다.
+  # ✅ 쿠버네티스가 지정한 아래 2개의 Key 이름을 반드시 지켜야 합니다.
+  tls.crt: |
+    -----BEGIN CERTIFICATE-----
+    MIIDdTCCAl2gAwIBAgILBAAAAAABFUuDFcwDQYJKoZIhvcNAQELBQAwYzELMAkG
+    ... (인증서 공개키 내용) ...
+    -----END CERTIFICATE-----
+    
+  tls.key: |
+    -----BEGIN RSA PRIVATE KEY-----
+    MIIEowIBAAKCAQEAn9R...
+    ... (인증서 개인키 내용) ...
+    -----END RSA PRIVATE KEY-----
+```
+
+#### 2-5-3. kubernetes.io/dockerconfigjson 타입 예시 (이미지 저장소 로그인)
+> 쿠버네티스 엔진(Kubelet)이 비공개 도커 레지스트리(Docker Hub, ECR 등)에 로그인할 때 쓰는 secret
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: private-registry-auth
+type: kubernetes.io/dockerconfigjson # ⚠️ 도커 로그인 전용 양식임을 명시
+data:
+  # ❌ 다른 이름은 안 됩니다. 오직 이 이름 하나만 허용합니다.
+  # 💡 도커 로그인 정보 JSON 파일 내용을 Base64로 인코딩한 값입니다.
+  .dockerconfigjson: eyJhdXRocyI6eyJteS1yZWdpc3RyeS5jb20iOnstdXNlcm5hbWUiOiJhbG...
+```
+
+## ▶ 응용1 : Configmap의 환경변수들을 Secret을 사용해서 작성하고, App에서는 같은 결과가 나오도록 확인해 보세요.
+- Secret 생성하고 **stringData** 방식으로 값을 저장한다 
+- deployment 내 envFrom.secretRef 로 지정하여 불러 들인다.
+
+
+## ▶ 응용2 : 반대로 Secret의 DB정보를 Configmap으로 만들어보고 App을 동작시켜 보세요
+- Configmap을 생성하고 data 형식으로 | 를 통해 파일을 만든다.
+- volumes을 생성한다. (`volumes.names.configMap`)
+- container에서 "volumes"를 마운트 지정한다. 
+
+
+
+
+
+
 
 
